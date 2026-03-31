@@ -331,7 +331,7 @@ enum InjectionMode: String, CaseIterable {
 class InjectorModel: ObservableObject {
     @Published var inputURL: URL? = nil
     @Published var mode: InjectionMode = .apmp
-    @Published var baseline: Int = 65
+    @Published var baseline: Int = 63
     @Published var overwrite: Bool = false
     @Published var status: String = ""
     @Published var statusColor: NSColor = .secondaryLabelColor
@@ -438,7 +438,7 @@ struct ContentView: View {
                     if model.mode == .apmp {
                         HStack {
                             Text("Camera baseline:")
-                            TextField("65", value: $model.baseline, format: .number)
+                            TextField("63", value: $model.baseline, format: .number)
                                 .frame(width: 70)
                                 .textFieldStyle(.roundedBorder)
                                 .multilineTextAlignment(.center)

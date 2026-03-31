@@ -217,7 +217,7 @@ def inject_youtube_vr180(input_path, output_path):
 
 # ── Vision Pro APMP (Apple Projected Media Profile) ────────────────────
 
-def inject_apmp_vr180(input_path, output_path, baseline_mm=65.0):
+def inject_apmp_vr180(input_path, output_path, baseline_mm=63.0):
     """Inject VR180 APMP metadata for Vision Pro (visionOS 26+). Pure Python."""
 
     # eyes/stri: stereo indication = 0x03 (side-by-side)
