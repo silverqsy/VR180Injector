@@ -6,7 +6,7 @@ A native macOS app to inject VR180 metadata into SBS H.265 video files — **no 
 
 - **YouTube VR180** — Injects Google Spherical Video V2 metadata (st3d + sv3d) for YouTube upload
 - **Vision Pro APMP** — Injects Apple Projected Media Profile metadata (vexu + hfov) for native VR180 stereo playback on visionOS 26+
-- **Adjustable camera baseline** — Default 65mm (human IPD)
+- **Adjustable camera baseline** — Default 63mm
 - **Overwrite mode** — Modify files in-place, no copy needed
 - **Handles large files** — Only modifies the moov atom, works with 17GB+ files
 - **Drag & drop** — Drop video files directly onto the app
