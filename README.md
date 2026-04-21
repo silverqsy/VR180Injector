@@ -6,10 +6,11 @@ A native macOS app to inject VR180 metadata into SBS H.265 video files — **no 
 
 - **YouTube VR180** — Injects Google Spherical Video V2 metadata (st3d + sv3d) for YouTube upload
 - **Vision Pro APMP** — Injects Apple Projected Media Profile metadata (vexu + hfov) for native VR180 stereo playback on visionOS 26+
+- **Batch processing** — Queue multiple files or entire folders, process them in one go with per-item status
 - **Adjustable camera baseline** — Default 64mm
 - **Overwrite mode** — Modify files in-place, no copy needed
 - **Handles large files** — Only modifies the moov atom, works with 17GB+ files
-- **Drag & drop** — Drop video files directly onto the app
+- **Drag & drop** — Drop one or many files, or drop a folder (recursively finds .mp4 / .mov / .m4v)
 
 ## Download
 
@@ -30,7 +31,7 @@ swiftc -O -parse-as-library -o "VR180 Injector" VR180Injector.swift \
 
 ## Size
 
-260KB native binary — no Python, no runtime dependencies.
+~400 KB native binary — no Python, no runtime dependencies. Signed DMG is ~150 KB.
 
 ## License
 
