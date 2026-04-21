@@ -328,28 +328,94 @@ enum InjectionMode: String, CaseIterable {
     case apmp = "Vision Pro APMP"
 }
 
-class InjectorModel: ObservableObject {
-    @Published var inputURL: URL? = nil
-    @Published var mode: InjectionMode = .apmp
-    @Published var baseline: Int = 63
-    @Published var overwrite: Bool = false
-    @Published var status: String = ""
-    @Published var statusColor: NSColor = .secondaryLabelColor
-    @Published var isProcessing = false
+enum ItemStatus: Equatable {
+    case pending
+    case processing
+    case success(String)
+    case failed(String)
+}
 
-    var inputName: String { inputURL?.lastPathComponent ?? "" }
+struct FileItem: Identifiable, Equatable {
+    let id = UUID()
+    let url: URL
+    var status: ItemStatus = .pending
+}
+
+class InjectorModel: ObservableObject {
+    @Published var items: [FileItem] = []
+    @Published var mode: InjectionMode = .apmp
+    @Published var baseline: Int = 64
+    @Published var overwrite: Bool = false
+    @Published var isProcessing = false
+    @Published var progressText: String = ""
+
+    var successCount: Int {
+        items.reduce(0) { n, i in if case .success = i.status { return n+1 } else { return n } }
+    }
+    var failedCount: Int {
+        items.reduce(0) { n, i in if case .failed = i.status { return n+1 } else { return n } }
+    }
+
+    func addURLs(_ urls: [URL]) {
+        var found: [URL] = []
+        for u in urls {
+            var isDir: ObjCBool = false
+            FileManager.default.fileExists(atPath: u.path, isDirectory: &isDir)
+            if isDir.boolValue {
+                if let en = FileManager.default.enumerator(at: u, includingPropertiesForKeys: nil) {
+                    for case let f as URL in en {
+                        let e = f.pathExtension.lowercased()
+                        if e == "mp4" || e == "mov" || e == "m4v" { found.append(f) }
+                    }
+                }
+            } else {
+                let e = u.pathExtension.lowercased()
+                if e == "mp4" || e == "mov" || e == "m4v" { found.append(u) }
+            }
+        }
+        let existing = Set(items.map { $0.url.standardizedFileURL })
+        for f in found where !existing.contains(f.standardizedFileURL) {
+            items.append(FileItem(url: f))
+        }
+    }
+
+    func browse() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.movie, .mpeg4Movie, .quickTimeMovie]
+        panel.allowsMultipleSelection = true
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        if panel.runModal() == .OK { addURLs(panel.urls) }
+    }
+
+    func clear() {
+        guard !isProcessing else { return }
+        items.removeAll()
+        progressText = ""
+    }
+
+    func remove(_ id: UUID) {
+        guard !isProcessing else { return }
+        items.removeAll { $0.id == id }
+    }
 
     func inject() {
-        guard let input = inputURL else {
-            showStatus("No input file selected", color: .systemRed)
-            return
-        }
-
+        guard !items.isEmpty, !isProcessing else { return }
         isProcessing = true
-        showStatus("Injecting metadata...", color: .systemBlue)
-
+        // Reset non-success items so re-runs retry failures
+        for i in items.indices {
+            if case .success = items[i].status { continue }
+            items[i].status = .pending
+        }
+        let total = items.count
         DispatchQueue.global(qos: .userInitiated).async { [self] in
-            do {
+            for i in items.indices {
+                if case .success = items[i].status { continue }
+                DispatchQueue.main.sync {
+                    items[i].status = .processing
+                    progressText = "Processing \(i + 1) of \(total)…"
+                }
+                let input = items[i].url
                 let output: URL
                 if overwrite {
                     output = input
@@ -359,47 +425,27 @@ class InjectorModel: ObservableObject {
                     let ext = input.pathExtension
                     output = input.deletingLastPathComponent()
                         .appendingPathComponent("\(stem)\(suffix).\(ext)")
-                    // For non-overwrite, let user pick via save panel on main thread
-                    // (simplified: just use default path)
                 }
-
                 let atoms: Data
                 switch mode {
                 case .youtube: atoms = buildYouTubeAtoms()
                 case .apmp:    atoms = buildAPMPAtoms(baselineMM: Double(baseline))
                 }
-
-                try injectAtoms(inputURL: input, outputURL: output, injectData: atoms)
-
-                let label = mode == .youtube ? "YouTube VR180" : "Vision Pro APMP (\(baseline)mm)"
-                DispatchQueue.main.async {
-                    self.showStatus("\(label) injected: \(output.lastPathComponent)", color: .systemGreen)
-                    self.isProcessing = false
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    self.showStatus("Error: \(error.localizedDescription)", color: .systemRed)
-                    self.isProcessing = false
+                do {
+                    try injectAtoms(inputURL: input, outputURL: output, injectData: atoms)
+                    DispatchQueue.main.sync {
+                        items[i].status = .success(output.lastPathComponent)
+                    }
+                } catch {
+                    DispatchQueue.main.sync {
+                        items[i].status = .failed(error.localizedDescription)
+                    }
                 }
             }
-        }
-    }
-
-    func showStatus(_ msg: String, color: NSColor) {
-        DispatchQueue.main.async {
-            self.status = msg
-            self.statusColor = color
-        }
-    }
-
-    func browse() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.movie, .mpeg4Movie, .quickTimeMovie]
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        if panel.runModal() == .OK {
-            inputURL = panel.url
-            status = ""
+            DispatchQueue.main.sync {
+                isProcessing = false
+                progressText = "Done: \(successCount) ok" + (failedCount > 0 ? ", \(failedCount) failed" : "")
+            }
         }
     }
 }
@@ -414,12 +460,44 @@ struct ContentView: View {
             Text("Inject VR180 metadata into SBS H.265 files — no re-encoding")
                 .foregroundColor(.secondary).font(.caption)
 
-            // Input
-            GroupBox("Input") {
-                HStack {
-                    TextField("Select a SBS video file (.mp4, .mov)", text: .constant(model.inputName))
-                        .textFieldStyle(.roundedBorder).disabled(true)
-                    Button("Browse") { model.browse() }
+            // Input file list
+            GroupBox {
+                VStack(spacing: 0) {
+                    HStack {
+                        Text("Input Files (\(model.items.count))").font(.headline)
+                        Spacer()
+                        Button("Add…") { model.browse() }
+                            .disabled(model.isProcessing)
+                        Button("Clear") { model.clear() }
+                            .disabled(model.isProcessing || model.items.isEmpty)
+                    }
+                    .padding(.bottom, 4)
+
+                    if model.items.isEmpty {
+                        Text("Drop MP4/MOV files or folders here, or click Add")
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity, minHeight: 120)
+                    } else {
+                        List {
+                            ForEach(model.items) { item in
+                                HStack(spacing: 8) {
+                                    statusIcon(item.status)
+                                    Text(item.url.lastPathComponent)
+                                        .lineLimit(1).truncationMode(.middle)
+                                    Spacer(minLength: 8)
+                                    statusDetail(item.status)
+                                    Button(action: { model.remove(item.id) }) {
+                                        Image(systemName: "xmark.circle.fill")
+                                            .foregroundColor(.secondary)
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .disabled(model.isProcessing)
+                                }
+                            }
+                        }
+                        .frame(minHeight: 140, maxHeight: 220)
+                        .listStyle(.bordered)
+                    }
                 }
             }
 
@@ -434,34 +512,36 @@ struct ContentView: View {
                                 .tag(mode)
                         }
                     }.pickerStyle(.radioGroup).labelsHidden()
+                        .disabled(model.isProcessing)
 
                     if model.mode == .apmp {
                         HStack {
                             Text("Camera baseline:")
-                            TextField("63", value: $model.baseline, format: .number)
+                            TextField("64", value: $model.baseline, format: .number)
                                 .frame(width: 70)
                                 .textFieldStyle(.roundedBorder)
                                 .multilineTextAlignment(.center)
+                                .disabled(model.isProcessing)
                             Text("mm")
                         }.padding(.leading, 20)
                     }
                 }
             }
 
-            Toggle("Overwrite original file (no copy)", isOn: $model.overwrite)
-                .toggleStyle(.checkbox)
+            Toggle("Overwrite original files (no copy)", isOn: $model.overwrite)
+                .toggleStyle(.checkbox).disabled(model.isProcessing)
 
             Button(action: { model.inject() }) {
-                Text("Inject Metadata")
-                    .frame(width: 180, height: 32)
+                Text(buttonLabel)
+                    .frame(width: 200, height: 32)
             }
             .buttonStyle(.borderedProminent)
-            .disabled(model.inputURL == nil || model.isProcessing)
+            .disabled(model.items.isEmpty || model.isProcessing)
 
-            Text(model.status)
-                .foregroundColor(Color(model.statusColor))
+            Text(model.progressText)
+                .foregroundColor(.secondary)
                 .font(.callout)
-                .lineLimit(2)
+                .lineLimit(1)
                 .frame(maxWidth: .infinity)
 
             Spacer()
@@ -470,16 +550,55 @@ struct ContentView: View {
                 .foregroundColor(.secondary).font(.caption2)
         }
         .padding()
-        .frame(width: 520, height: 420)
+        .frame(width: 580, height: 620)
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
-            if let provider = providers.first {
-                _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                    if let url = url {
-                        DispatchQueue.main.async { model.inputURL = url }
-                    }
+            var urls: [URL] = []
+            let group = DispatchGroup()
+            for p in providers {
+                group.enter()
+                _ = p.loadObject(ofClass: URL.self) { url, _ in
+                    if let url = url { urls.append(url) }
+                    group.leave()
                 }
             }
+            group.notify(queue: .main) {
+                model.addURLs(urls)
+            }
             return true
+        }
+    }
+
+    var buttonLabel: String {
+        if model.items.isEmpty { return "Inject Metadata" }
+        if model.items.count == 1 { return "Inject Metadata" }
+        return "Inject \(model.items.count) Files"
+    }
+
+    @ViewBuilder
+    func statusIcon(_ status: ItemStatus) -> some View {
+        switch status {
+        case .pending:
+            Image(systemName: "circle").foregroundColor(.secondary)
+        case .processing:
+            ProgressView().controlSize(.small)
+        case .success:
+            Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
+        case .failed:
+            Image(systemName: "xmark.circle.fill").foregroundColor(.red)
+        }
+    }
+
+    @ViewBuilder
+    func statusDetail(_ status: ItemStatus) -> some View {
+        switch status {
+        case .success(let name):
+            Text("→ \(name)").font(.caption).foregroundColor(.secondary)
+                .lineLimit(1).truncationMode(.middle)
+        case .failed(let msg):
+            Text(msg).font(.caption).foregroundColor(.red)
+                .lineLimit(1).truncationMode(.middle)
+        default:
+            EmptyView()
         }
     }
 }
